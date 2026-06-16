@@ -1,168 +1,119 @@
-"""
-dataset.py
-
-Handles text preprocessing, vocabulary construction, and PyTorch Dataset/DataLoader 
-generation for the Flickr8k / Flickr30k image captioning datasets.
-"""
-
 import os
-import re
-import pickle
-from collections import Counter
 import torch
 from torch.utils.data import Dataset, DataLoader
 from PIL import Image
-import torchvision.transforms as transforms
-from config import Config
+from torchvision import transforms
 
-class Vocabulary:
-    def __init__(self, min_freq=Config.MIN_WORD_FREQ):
-        self.min_freq = min_freq
-        
-        # Initialize mapping dictionaries
-        self.word2idx = {}
-        self.idx2word = {}
-        
-        # Reserved special tokens tracking
-        self.pad_token = Config.PAD_TOKEN
-        self.start_token = Config.START_TOKEN
-        self.end_token = Config.END_TOKEN
-        self.unk_token = Config.UNK_TOKEN
-        
-        self._build_fixed_vocab()
-
-    def _build_fixed_vocab(self):
-        """Initializes the fixed special tokens in the dictionaries."""
-        # TODO: Assign unique indices (0, 1, 2, 3) to the four special tokens
-        # and populate self.word2idx and self.idx2word
-        self.idx2word = {
-            0: self.pad_token,
-            1: self.start_token,
-            2: self.end_token,
-            3: self.unk_token
-        }
-        self.word2idx = {
-            self.pad_token : 0,
-            self.start_token: 1,
-            self.end_token: 2,
-            self.unk_token: 3
-        }
-
-    def clean_text(self, text):
-        """
-        Implements Section 3.2(a) Text Normalization.
-        Removes special characters, non-letter characters, and standardizes spacing.
-        """
-        # TODO: Lowercase text, strip punctuation/symbols, return cleaned string
-        text = str(text).lower()
-        text = re.sub(r"[^a-z\s]", "", text)
-        cleaned_text = re.sub(r"\s+", " ", text).strip()
-
-        return cleaned_text
-    
-
-    def build_vocabulary(self, sentence_list):
-        """
-        Builds word2idx and idx2word based on word frequency across all captions.
-        Filters out words below MIN_WORD_FREQ.
-        """
-        # TODO: Tokenize sentences, count word frequencies, filter by self.min_freq,
-        # and update the mapping dictionaries dynamically.
-        counts = Counter()
-        for sentece in sentence_list:
-            counts.update(sentece.split())
-
-        idx = 4
-        for token,freq in counts.items():
-            if freq >= self.min_freq:
-                self.word2idx[token] = idx
-                self.idx2word[idx] = token
-                idx += 1
-
-    def numericalize(self, text):
-        """
-        Converts a raw caption string into a list of integer token IDs.
-        Wraps the sequence with <start> and <end> tokens.
-        """
-        # TODO: Clean text, split tokens, map to integer IDs (use <unk> if word missing)
-        # Append <start> token ID at front and <end> token ID at the back
-        cleaned_text = self.clean_text(text)
-        text_list = cleaned_text.split()
-        num_list = []
-        num_list.append(self.word2idx[self.start_token])
-        for word in text_list:
-            if word in self.word2idx:
-                num_list.append(self.word2idx[word])
-            else:
-                num_list.append(self.word2idx[self.unk_token])  
-        
-        num_list.append(self.word2idx[self.end_token])
-        return  num_list
-
-
+# ==========================================
+# 1. Flickr Dataset Class
+# ==========================================
 class FlickrDataset(Dataset):
-    def __init__(self, image_dir, caption_file, vocab=None, transform=None, is_flickr30k=False):
-        """
-        Initializes data frames, reads captions, builds/loads vocabulary, 
-        and sets up image transformation pipelines.
-        """
+    def __init__(self, image_dir, caption_file, transform=None):
         self.image_dir = image_dir
         self.transform = transform
+        self.data = []
         
-        # TODO: Load captions text file (Flickr8k uses tab/space delimiters, 
-        # Flickr30k uses a CSV formatting). Parse them into pairs of (image_filename, caption).
-        self.data = [] # List of tuples: [("image1.jpg", "cleaned caption"), ...]
-
-        # Handle Vocabulary state
-        if vocab is None:
-            self.vocab = Vocabulary()
-            # Extract raw captions to build vocab
-            all_captions = [item[1] for item in self.data]
-            self.vocab.build_vocabulary(all_captions)
-        else:
-            self.vocab = vocab
+        # Read the text file and separate images and captions
+        with open(caption_file, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+            # Skip the first line if it's a header
+            if "image" in lines[0].lower(): 
+                lines = lines[1:]
+                
+            for line in lines:
+                line = line.strip()
+                if not line: continue
+                
+                # Handle different dataset formats (comma or hashtag)
+                if ',' in line:
+                    parts = line.split(',', 1)
+                else:
+                    parts = line.replace('\t', ' ').split('#')
+                    if len(parts) > 1:
+                        parts[1] = parts[1].split(' ', 1)[1] if ' ' in parts[1] else parts[1]
+                        
+                if len(parts) == 2:
+                    img_name, caption = parts[0].strip(), parts[1].strip()
+                    self.data.append((img_name, caption))
 
     def __len__(self):
         return len(self.data)
 
-    def __getitem__(self, index):
-        """
-        Returns:
-            image_tensor (torch.Tensor): Preprocessed image tensor
-            caption_tokens (torch.Tensor): Numericalized token sequence tensor
-        """
-        img_name, caption = self.data[index]
+    def __getitem__(self, idx):
+        img_name, caption = self.data[idx]
+        img_path = os.path.join(self.image_dir, img_name)
         
-        # TODO: Load image using PIL.Image, apply self.transform
-        # TODO: Turn caption string into integer sequence via self.vocab.numericalize
+        # Read the image and convert it to standard RGB format
+        image = Image.open(img_path).convert("RGB")
         
-        return None, None # Replace with actual tensors
+        # Pass the image through the transform pipeline (for Swin and ViT)
+        if self.transform is not None:
+            image = self.transform(image)
+            
+        # In the new architecture, we return the raw English text directly.
+        # Text-to-token conversion is handled by the Tokenizer in the Collate section.
+        return image, caption
 
-
-class CaptionCollate:
-    """
-    Custom collate function for DataLoader to handle variable length captions
-    by padding them to a standardized tensor block.
-    """
-    def __init__(self, pad_idx, max_len=Config.MAX_CAPTION_LEN):
-        self.pad_idx = pad_idx
-        self.max_len = max_len
+# ==========================================
+# 2. CapsCollate Class (Batching and Padding Manager)
+# ==========================================
+class CapsCollate:
+    def __init__(self, tokenizer, max_length):
+        self.tokenizer = tokenizer
+        self.max_length = max_length
 
     def __call__(self, batch):
-        """
-        Pads all caption sequences in the current batch to max_len 
-        and stacks them alongside corresponding image tensors.
-        """
-        # TODO: Separate images and captions from batch input
-        # TODO: Pad each caption sequence to self.max_len using self.pad_idx
-        # TODO: Stack images into a single batch tensor and captions into another
-        return None, None
+        imgs = []
+        captions = []
+        
+        for image, caption in batch:
+            imgs.append(image)
+            captions.append(caption)
+            
+        # 1. Stack the images
+        imgs = torch.stack(imgs, dim=0)
+        
+        # 2. Use T5 Tokenizer to convert words to numbers and auto-pad.
+        # This function automatically fills empty spaces with standard T5 tokens.
+        tokenized_texts = self.tokenizer(
+            captions,
+            padding=True,              # Pad to the longest sentence in this Batch
+            truncation=True,           # Truncate sentences longer than the max limit
+            max_length=self.max_length,
+            return_tensors="pt"        # Output directly as PyTorch tensors
+        )
+        
+        # T5 model requires two things: tokenized words (input_ids) and padding map (attention_mask)
+        input_ids = tokenized_texts["input_ids"]
+        attention_mask = tokenized_texts["attention_mask"]
+        
+        return imgs, input_ids, attention_mask
 
-
-def get_dataloader(image_dir, caption_file, batch_size, vocab=None, transform=None, shuffle=True):
-    """Factory helper function to easily build and return a complete PyTorch DataLoader."""
-    # TODO: Define baseline data transformation (Resize, CenterCrop, ToTensor, Normalize)
-    # TODO: Instantiate FlickrDataset
-    # TODO: Instantiate CaptionCollate using dataset.vocab.word2idx[Config.PAD_TOKEN]
-    # TODO: Return configured DataLoader object
-    pass
+# ==========================================
+# 3. get_dataloader Function (Final Builder Function)
+# ==========================================
+def get_dataloader(image_dir, caption_file, tokenizer, transform, batch_size=16, max_length=50, shuffle=True, num_workers=2):
+    
+    # Create the dataset
+    dataset = FlickrDataset(
+        image_dir=image_dir,
+        caption_file=caption_file,
+        transform=transform
+    )
+    
+    # Create the padding manager using the Hugging Face tokenizer
+    pad_collate = CapsCollate(
+        tokenizer=tokenizer,
+        max_length=max_length
+    )
+    
+    # Set up the DataLoader
+    dataloader = DataLoader(
+        dataset=dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=num_workers,
+        collate_fn=pad_collate
+    )
+    
+    return dataloader, dataset
