@@ -1,0 +1,23 @@
+# Python caches
+__pycache__/
+*.py[cod]
+*~
+.ipynb_checkpoints/
+
+# PyTorch and Models weights
+*.pth
+*.pt
+*.ckpt
+torch_cache/
+checkpoints/
+
+# Datasets
+data/
+flickr8k/
+Images/
+*.csv
+*.txt
+
+# Virtual Environments
+venv/
+env/
